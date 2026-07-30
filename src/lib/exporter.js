@@ -114,6 +114,60 @@ function buildManifest(siteJson, freshDump) {
 }
 
 /*
+ * ZIP has no hardlink concept, so hardlinked files land in the archive as
+ * independent copies. This walk records which files shared an inode on the
+ * source, as { duplicatePath: canonicalPath } (posix paths relative to
+ * siteRoot), so the importer can restore the links after copying. Symlinks
+ * are never followed. A hardlink whose other name lives outside the site
+ * root can't be grouped and stays a plain copy — intentionally, same
+ * policy as symlinks.
+ */
+function detectHardlinks(siteRoot, logger) {
+	const skipDirs = new Set(EXPORT_IGNORE.filter((p) => !p.includes('*')));
+	const groups = new Map(); // "dev:ino" -> [relative paths]
+	const walk = (rel) => {
+		for (const entry of fs.readdirSync(path.join(siteRoot, rel))) {
+			const entryRel = rel ? `${rel}/${entry}` : entry;
+			if (skipDirs.has(entryRel)) {
+				continue;
+			}
+			let stat;
+			try {
+				stat = fs.lstatSync(path.join(siteRoot, entryRel));
+			} catch (err) {
+				continue;
+			}
+			if (stat.isDirectory()) {
+				walk(entryRel);
+			} else if (stat.isFile() && stat.nlink > 1) {
+				const key = `${stat.dev}:${stat.ino}`;
+				if (!groups.has(key)) {
+					groups.set(key, []);
+				}
+				groups.get(key).push(entryRel);
+			}
+		}
+	};
+	try {
+		walk('');
+	} catch (err) {
+		logger.warn(`Site Beam: hardlink detection failed, exporting as plain copies: ${err.message}`);
+		return {};
+	}
+	const map = {};
+	for (const paths of groups.values()) {
+		if (paths.length < 2) {
+			continue;
+		}
+		paths.sort();
+		for (let i = 1; i < paths.length; i++) {
+			map[paths[i]] = paths[0];
+		}
+	}
+	return map;
+}
+
+/*
  * Returns { sqlPath, freshDump, cleanup }. Prefers a fresh mysqldump when the
  * site is running; falls back to the last dump Local wrote on site stop.
  */
@@ -159,6 +213,10 @@ async function writeExportArchive(cradle, logger, siteJson, output, { beforeStre
 	const manifest = buildManifest(siteJson, dump.freshDump);
 	manifest.site.sourcePath = siteRoot;
 	manifest.site.sourceWebRootName = path.basename(webRoot);
+	const hardlinks = detectHardlinks(siteRoot, logger);
+	if (Object.keys(hardlinks).length) {
+		manifest.hardlinks = hardlinks;
+	}
 	if (beforeStream) {
 		beforeStream(manifest);
 	}
@@ -191,7 +249,7 @@ async function writeExportArchive(cradle, logger, siteJson, output, { beforeStre
 		archive.pipe(output);
 		// The whole site folder, real layout preserved.
 		// follow: true dereferences symlinks — dev setups often symlink plugins/themes.
-		archive.glob('**/*', { cwd: siteRoot, dot: true, follow: true, ignore: EXPORT_IGNORE });
+		archive.glob('**/*', { cwd: siteRoot, dot: true, follow: false, ignore: EXPORT_IGNORE });
 		archive.file(dump.sqlPath, { name: 'app/sql/local.sql' });
 		archive.append(JSON.stringify(manifest, null, 2), { name: 'beam-manifest.json' });
 		archive.append(JSON.stringify(siteJson, null, 2), { name: 'local-site.json' });

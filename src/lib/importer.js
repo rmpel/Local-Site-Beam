@@ -171,6 +171,35 @@ function fixSocketReferences(destRoot, webRootName, logger) {
 }
 
 /*
+ * Restores hardlinks recorded in the manifest ({ duplicate: canonical },
+ * posix paths relative to the site root). The zip stores them as independent
+ * copies, so any failure here just leaves a working copy in place. Paths are
+ * confined to destRoot — the manifest arrives inside the zip and is untrusted.
+ */
+function restoreHardlinks(destRoot, hardlinks, logger) {
+	const inRoot = (rel) => {
+		const abs = path.resolve(destRoot, rel);
+		return abs.startsWith(destRoot + path.sep) ? abs : null;
+	};
+	for (const [dup, canonical] of Object.entries(hardlinks || {})) {
+		const dupAbs = inRoot(dup);
+		const canonicalAbs = inRoot(canonical);
+		if (!dupAbs || !canonicalAbs || dupAbs === canonicalAbs) {
+			continue;
+		}
+		try {
+			if (!fs.lstatSync(canonicalAbs).isFile()) {
+				continue;
+			}
+			fs.rmSync(dupAbs, { force: true });
+			fs.linkSync(canonicalAbs, dupAbs);
+		} catch (err) {
+			logger.warn(`Site Beam: could not restore hardlink ${dup} -> ${canonical}: ${err.message}`);
+		}
+	}
+}
+
+/*
  * Copies the exported site folder into an (already created) site.
  * No service interaction — safe to run while Local's creation flow is active.
  */
@@ -206,7 +235,10 @@ async function copySiteFiles(cradle, logger, siteJson, job, { freshSite }) {
 		if (SPECIAL_ROOT_ENTRIES.includes(entry)) {
 			continue;
 		}
-		await fs.promises.cp(path.join(job.extractedDir, entry), path.join(destRoot, entry), { recursive: true, force: true });
+		// verbatimSymlinks keeps link targets as stored (relative links stay
+		// relative) — the default rewrites them to absolute paths into the
+		// temporary extraction dir, which is deleted after import.
+		await fs.promises.cp(path.join(job.extractedDir, entry), path.join(destRoot, entry), { recursive: true, force: true, verbatimSymlinks: true });
 	}
 
 	// Custom environments: restore conf templates (DocumentRoot app/public_html
@@ -216,12 +248,13 @@ async function copySiteFiles(cradle, logger, siteJson, job, { freshSite }) {
 	if (freshSite && manifestSite.environment === 'custom' && fs.existsSync(extractedConf)) {
 		progress('conf', 'Restoring custom environment configuration…');
 		const destConf = path.join(destRoot, 'conf');
-		await fs.promises.cp(extractedConf, destConf, { recursive: true, force: true });
+		await fs.promises.cp(extractedConf, destConf, { recursive: true, force: true, verbatimSymlinks: true });
 		if (manifestSite.sourcePath && manifestSite.sourcePath !== destRoot) {
 			rewritePathsInDir(destConf, manifestSite.sourcePath, destRoot, logger);
 		}
 	}
 
+	restoreHardlinks(destRoot, job.manifest && job.manifest.hardlinks, logger);
 	fixSocketReferences(destRoot, webRootName, logger);
 }
 
@@ -336,6 +369,9 @@ function uniqueSitePath(baseDir, slug) {
 async function extractExportZip(zipPath, onProgress) {
 	(onProgress || (() => {}))('extracting', 'Extracting export…');
 	const extractedDir = path.join(path.dirname(zipPath), 'extracted');
+	// A leftover from a previous extraction breaks re-imports: files overwrite
+	// fine, but fs.symlink EEXISTs on already-present links.
+	fs.rmSync(extractedDir, { recursive: true, force: true });
 	await extractZip(zipPath, { dir: extractedDir });
 	let manifest = null;
 	const manifestPath = path.join(extractedDir, 'beam-manifest.json');
