@@ -1,7 +1,17 @@
 'use strict';
+
+/**
+ * Package: Local Site Beam - Beam your site to another LocalWP installation.
+ * Version: see package.json
+ * License: see README.md and LICENSE
+ * Author: Remon Pel
+ * URL: https://github.com/rmpel/Local-Site-Beam/
+ */
+
 /* Integration test for the Site Beam add-on, run outside Local by stubbing
  * the @getflywheel/local API surface (as documented from the real type defs).
- * Simulates source machine A and destination machine B in one process. */
+ * Simulates source machine A and destination machine B in one process. 
+ */
 
 const fs = require('fs');
 const os = require('os');
@@ -9,7 +19,7 @@ const path = require('path');
 const Module = require('module');
 const assert = require('assert');
 
-const ADDON = '/Users/rmpel/Development/claude-generic/local-site-beam';
+const ADDON = path.join(__dirname, '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'beam-test-'));
 
 // ---------- stubs for Local's runtime-provided modules ----------

@@ -1,8 +1,27 @@
-# ALPHA VERSION WARNING
+# Local Site Beam - Beam your site to another LocalWP installation.
+
+## LICENSING
+
+Copyright (C) 2026 Remon Pel.
+
+This software is released under the GNU General Public License v3.0 (or, at
+your option, any later version). The full license text is in the [LICENSE](LICENSE)
+file that ships with every copy.
+
+This means:
+
+- You can use it however you like for both personal and business projects.
+- If you modify and distribute your own version, you must share your source code under this exact same license.
+- You cannot strip my name or copyright notice; proper attribution must always remain.
+- While the license technically allows distribution, any copies must remain fully open-source, ensuring it stays free for everyone forever.
+
+## Changelog
+
+Can be found in [CHANGELOG.md](CHANGELOG.md)
 
 ## Co-authored by Claude, Fable 5
 
-This project is written by Claude, Fable 5, and tested by myself on local hardware, two laptops on the same LAN.
+This project is written by myself and Claude, Fable 5, and tested by myself on local hardware, two laptops on the same LAN.
 
 ## NO LIABILITY!!!!
 
@@ -62,17 +81,12 @@ Don't expect things to be perfect!
 - Send code to other computer (easy with Mac, or use WhatsApp or Slack, or whatever)
 - On receiving computer, paste code and click receive
 
-## Full readme follows, as written by Fable 5.
-
-# Site Beam — LAN site transfer for Local (LocalWP)
-
-> **Status: alpha.** Both transports (LAN and croc) verified working in
-> real two-machine transfers on Local 10.1.1 / macOS. Expect rough edges.
+## Documentation as written by Fable 5, and read/re-read/re-written by me, your host, Remon;
 
 A Local add-on that lets two or more computers running [Local](https://localwp.com)
 find each other on the local network via a **shared code** and copy **complete
 sites** (all files + full database) from one machine to another. Effectively
-"export on machine A, import on machine B" — in one click.
+"export on machine A, transfer export over, import on machine B" — in one click.
 
 - **Discovery**: mDNS/Bonjour. Machines only see each other when they have the
   *same* shared code (only a hash fingerprint of the code is broadcast).
@@ -87,7 +101,7 @@ sites** (all files + full database) from one machine to another. Effectively
   from the Apache/nginx conf template) are recreated on the destination as a
   custom environment with the source's web server + PHP version, and the
   source `conf/` is restored with absolute paths rewritten to the new site
-  folder.
+  folder. (Though default folder structure might remain after import).
 - **Import**: rides Local's own site-creation flow (the same pattern the
   official Cloud Backups add-on uses), then restores files, imports the
   database and rewrites URLs to the new host.
@@ -103,7 +117,7 @@ sites** (all files + full database) from one machine to another. Effectively
 
 ## Install (each computer)
 
-Requirements: Local 6+ (tested against the Local 9/10-era add-on API), Node
+Requirements: Local 9+ (tested against the Local 9/10-era add-on API), Node
 + npm available on the machine (only to install the add-on's dependencies).
 
 ### macOS / Linux
@@ -111,6 +125,10 @@ Requirements: Local 6+ (tested against the Local 9/10-era add-on API), Node
 ```sh
 git clone <this-folder-or-repo> local-site-beam   # or copy the folder
 cd local-site-beam
+
+# Either; Build it and install from dist/*zip
+./scripts/build.sh
+# Or; install from source
 ./scripts/install.sh
 ```
 
@@ -119,6 +137,8 @@ directory (`~/Library/Application Support/Local/addons` on macOS,
 `~/.config/Local/addons` on Linux).
 
 ### Windows
+
+I'm sorry, I'm not a Windows person. If you have a better way, please contribute.
 
 1. Copy this folder to `%AppData%\Local\addons\local-site-beam`.
 2. Inside it, run `npm install --omit=dev`.
@@ -136,7 +156,8 @@ Click **Browse sites**, then **Copy to this computer** on any site.
 
 - **Source site database**: a running site is dumped fresh at transfer time. A
   stopped site uses the dump Local wrote when it was last stopped; a site that
-  has never run on the source machine can't be exported until it's started once.
+  has never run on the source machine can't be exported until it's started at 
+  least once.
 - **New sites land** in the directory where most of your existing sites live
   (fallback: `~/Local Sites`), with the PHP/MySQL environment of your Local
   defaults. Files and database are exact copies of the source.
@@ -161,7 +182,7 @@ On the sending machine choose a site → **Send**; a code phrase like
 `beam-a1b2-c3d4-e5f6` appears. On the receiving machine, enter that phrase
 (and pick the conflict behaviour) → **Receive**. Works across the internet —
 no shared code or same-network requirement; the phrase *is* the secret, share
-it out-of-band.
+it out-of-band, and only with those you trust.
 
 ## Security model (v1)
 

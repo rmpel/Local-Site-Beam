@@ -1,5 +1,13 @@
 'use strict';
 
+/**
+ * Package: Local Site Beam - Beam your site to another LocalWP installation.
+ * Version: see package.json
+ * License: see README.md and LICENSE
+ * Author: Remon Pel
+ * URL: https://github.com/rmpel/Local-Site-Beam/
+ */
+
 const http = require('http');
 
 const Local = require('@getflywheel/local');

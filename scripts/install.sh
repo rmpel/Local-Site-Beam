@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+
+###
+# Package: Local Site Beam - Beam your site to another LocalWP installation.
+# Version: see package.json
+# License: see README.md and LICENSE
+# Author: Remon Pel
+# URL: https://github.com/rmpel/Local-Site-Beam/
+###
+
 # Installs the Site Beam add-on into Local by symlinking this folder into
 # Local's addons directory and installing its dependencies.
 set -euo pipefail

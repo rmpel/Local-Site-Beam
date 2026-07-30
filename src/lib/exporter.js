@@ -1,5 +1,13 @@
 'use strict';
 
+/**
+ * Package: Local Site Beam - Beam your site to another LocalWP installation.
+ * Version: see package.json
+ * License: see README.md and LICENSE
+ * Author: Remon Pel
+ * URL: https://github.com/rmpel/Local-Site-Beam/
+ */
+
 /*
  * Builds a site export as a zip stream containing the ENTIRE site folder,
  * preserving its real layout (custom environments may serve app/public_html
