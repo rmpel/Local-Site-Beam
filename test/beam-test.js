@@ -133,8 +133,22 @@ const siteAJson = {
 const emptySiteJson = { id: 'bbb222', name: 'Empty Site', domain: 'empty.local', path: path.join(TMP, 'machine-a', 'empty') };
 fs.mkdirSync(path.join(emptySiteJson.path, 'app', 'public'), { recursive: true });
 
+// Preferred-environment site (standard app/public layout) that nevertheless
+// runs Apache — the common case Local would otherwise re-provision as nginx.
+const siteDPath = path.join(TMP, 'machine-a', 'apache-pref');
+makeSiteDir(siteDPath, 'FROM-MACHINE-A-APACHE');
+const siteDJson = {
+	id: 'ddd444', name: 'Apache Pref', domain: 'apache-pref.local', path: siteDPath,
+	mysql: { database: 'local', user: 'root', password: 'root' },
+	services: {
+		php: { name: 'php', version: '8.3.1', role: 'php' },
+		mysql: { name: 'mysql', version: '8.0.35', role: 'db' },
+		apache: { name: 'apache', version: '2.4.43', role: 'http' },
+	},
+};
+
 const logger = { info: () => {}, warn: (m) => console.log('  [warn]', m), error: (m) => console.log('  [error]', m), child: function () { return this; } };
-const aSites = { aaa111: siteAJson, bbb222: emptySiteJson, ccc333: siteCJson };
+const aSites = { aaa111: siteAJson, bbb222: emptySiteJson, ccc333: siteCJson, ddd444: siteDJson };
 const cradleA = {
 	localLogger: logger,
 	siteData: {
@@ -207,9 +221,9 @@ const cradleB = {
 
 	const ping = await client.getJSON(peer, key, '/beam/v1/ping');
 	assert.strictEqual(ping.ok, true);
-	assert.strictEqual(ping.sites, 3);
+	assert.strictEqual(ping.sites, 4);
 	const { sites } = await client.getJSON(peer, key, '/beam/v1/sites');
-	assert.strictEqual(sites.length, 3);
+	assert.strictEqual(sites.length, 4);
 	const remoteFlux = sites.find((s) => s.name === 'Flux Demo');
 	assert.strictEqual(remoteFlux.php, '8.2.1');
 	console.log('3. ping + site list OK:', sites.map((s) => `${s.name} [${s.status}]`).join(', '));
@@ -290,7 +304,7 @@ const cradleB = {
 
 	// custom-environment site (4ortho-style layout)
 	const { sites: sites2 } = await client.getJSON(peer, key, '/beam/v1/sites');
-	assert.strictEqual(sites2.length, 3);
+	assert.strictEqual(sites2.length, 4);
 	const zipPath2 = path.join(machineB, 'dl2', 'export.zip');
 	fs.mkdirSync(path.dirname(zipPath2), { recursive: true });
 	await client.downloadToFile(peer, key, '/beam/v1/export/ccc333', zipPath2);
@@ -325,6 +339,21 @@ const cradleB = {
 	assert.ok(envOut.includes('DB_HOST="localhost"'), `.env socket not stripped: ${envOut}`);
 	assert.ok(envOut.includes('DB_SOCKET=/keep/this/mysqld.sock'), 'standalone DB_SOCKET line was wrongly touched');
 	console.log('15. .env DB_HOST socket path rewritten to plain localhost (standalone DB_SOCKET untouched)');
+
+	// preferred-environment site running Apache: must be provisioned as a
+	// custom environment so Local keeps Apache instead of defaulting to nginx.
+	const zipPathD = path.join(machineB, 'dl3', 'export.zip');
+	fs.mkdirSync(path.dirname(zipPathD), { recursive: true });
+	await client.downloadToFile(peer, key, '/beam/v1/export/ddd444', zipPathD);
+	const extractedPref = await importer.extractExportZip(zipPathD, () => {});
+	assert.notStrictEqual(extractedPref.manifest.site.environment, 'custom');
+	assert.strictEqual(extractedPref.manifest.site.webServer.name, 'apache');
+	const resPref = await importer.importExtracted(cradleB, logger, extractedPref, 'new', () => {});
+	assert.strictEqual(resPref.action, 'created');
+	assert.strictEqual(cradleB.lastNewSiteInfo.environment, 'custom');
+	assert.strictEqual(cradleB.lastNewSiteInfo.webServer, 'apache');
+	assert.strictEqual(cradleB.lastNewSiteInfo.phpVersion, '8.3.1');
+	console.log('16. preferred-env Apache site promoted to custom/apache/php 8.3.1 on import');
 
 	// failed provisioning: Local rolls the site back -> our folder cleanup must kick in
 	const extractedD = await importer.extractExportZip(zipPath2, () => {});

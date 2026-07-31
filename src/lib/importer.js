@@ -470,15 +470,21 @@ async function importExtracted(cradle, logger, { extractedDir, manifest }, mode,
 		multiSite: manifestSite.multiSite || false,
 		siteBeam: { importId },
 	};
-	// Reproduce custom environments (web server + PHP version) so the restored
-	// conf/ templates match the provisioned services.
-	if (manifestSite.environment === 'custom') {
+	// Reproduce the source's web server and PHP version. Local's "preferred"
+	// environment forces default services (nginx), silently dropping a source
+	// that ran Apache — so provision a custom environment whenever the source
+	// was already custom OR used a non-default web server. Custom conf/
+	// templates are still keyed off the recorded manifestSite.environment
+	// (see finishRestore), so this promotion does not trigger a conf restore;
+	// Local generates fresh conf for the chosen web server.
+	const sourceWebServer = manifestSite.webServer && manifestSite.webServer.name;
+	if (manifestSite.environment === 'custom' || (sourceWebServer && sourceWebServer !== 'nginx')) {
 		newSiteInfo.environment = 'custom';
 		if (manifestSite.php && manifestSite.php.version) {
 			newSiteInfo.phpVersion = manifestSite.php.version;
 		}
-		if (manifestSite.webServer && manifestSite.webServer.name) {
-			newSiteInfo.webServer = manifestSite.webServer.name;
+		if (sourceWebServer) {
+			newSiteInfo.webServer = sourceWebServer;
 		}
 	}
 	let site = null;
