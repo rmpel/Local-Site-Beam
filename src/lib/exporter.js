@@ -38,6 +38,36 @@ const BEAM_FORMAT = 2;
 
 const EXPORT_IGNORE = ['mysqldata', 'mysqldata/**', 'logs', 'logs/**', 'app/sql', 'app/sql/**'];
 
+/*
+ * Local's siteDatabase.dump() writes to a FIXED intermediate file
+ * (<site>/app/sql/local.sql.tmp) and then renames it onto our target path.
+ * Two dumps of the SAME site running concurrently therefore clobber each
+ * other: the first rename moves the shared .tmp away and the second fails with
+ * `ENOENT … rename local.sql.tmp`. The export endpoint has no request
+ * serialization, so two peers (or a double-fired request) pulling the same
+ * running site hit exactly this. Serialize dumps per site id — concurrent
+ * dumps queue instead of racing. Keyed by site id; entries self-clean so the
+ * map can't grow unbounded.
+ */
+const dumpChains = new Map();
+let dumpSeq = 0;
+
+function withDumpLock(siteId, task) {
+	const prev = dumpChains.get(siteId) || Promise.resolve();
+	const result = prev.then(() => task());
+	// The stored tail never rejects, so the next queued caller always runs
+	// regardless of this dump's outcome; each caller still awaits its own
+	// `result` and sees its own error.
+	const tail = result.then(() => {}, () => {});
+	dumpChains.set(siteId, tail);
+	tail.then(() => {
+		if (dumpChains.get(siteId) === tail) {
+			dumpChains.delete(siteId);
+		}
+	});
+	return result;
+}
+
 function toSite(siteJson) {
 	return siteJson instanceof Local.Site ? siteJson : new Local.Site(siteJson);
 }
@@ -189,8 +219,11 @@ async function prepareSqlDump(cradle, siteJson) {
 		// status stays unknown; fall through to the on-disk dump
 	}
 	if (status === 'running') {
-		const tmpSql = path.join(os.tmpdir(), `site-beam-${site.id}-${Date.now()}.sql`);
-		await siteDatabase.dump(site, tmpSql);
+		// Counter (not just Date.now()) guarantees a unique target even for
+		// requests landing in the same millisecond; the per-site lock keeps the
+		// dumps themselves from racing on Local's shared local.sql.tmp.
+		const tmpSql = path.join(os.tmpdir(), `site-beam-${site.id}-${Date.now()}-${++dumpSeq}.sql`);
+		await withDumpLock(site.id, () => siteDatabase.dump(site, tmpSql));
 		return { sqlPath: tmpSql, freshDump: true, cleanup: () => fs.unlink(tmpSql, () => {}) };
 	}
 	const savedDump = path.join(LocalMain.formatHomePath(site.paths.sql), 'local.sql');

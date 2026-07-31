@@ -98,6 +98,10 @@ fs.linkSync(path.join(aContent, 'uploads', 'original.txt'), path.join(aContent, 
 // web root app/public_html, composer siblings, conf/ with absolute DocumentRoot.
 const siteCPath = path.join(TMP, 'machine-a', 'ortho');
 fs.mkdirSync(path.join(siteCPath, 'app', 'public_html', 'wp-content'), { recursive: true });
+// Dev pattern: the default web root app/public is a symlink to the real one.
+// Local pre-creates a real empty app/public on the destination, so the importer
+// must clear it before restoring this link (else fs.cp aborts the app copy).
+fs.symlinkSync('public_html', path.join(siteCPath, 'app', 'public'));
 fs.mkdirSync(path.join(siteCPath, 'app', 'vendor'), { recursive: true });
 fs.mkdirSync(path.join(siteCPath, 'app', 'sql'), { recursive: true });
 fs.mkdirSync(path.join(siteCPath, 'conf', 'apache'), { recursive: true });
@@ -181,11 +185,22 @@ const cradleB = {
 		// Simulates Local: build site record, apply the filter, provision dirs, fire siteAdded.
 		addSite: async ({ newSiteInfo }) => {
 			cradleB.lastNewSiteInfo = newSiteInfo;
+			// Mirror Local's getLocalSiteServices(): the web server defaults to
+			// nginx and only switches when newSiteInfo.webServer is a compound
+			// "name-version" string (getServiceSettingValueDetails splits on '-'
+			// and drops it unless BOTH parts are present). This makes the stub
+			// reject a bare "apache" exactly as Local does.
+			const [wsName, wsVer] = String(newSiteInfo.webServer || '').split('-');
+			const httpService = (wsName && wsVer)
+				? { name: wsName, version: wsVer, role: 'http' }
+				: { name: 'nginx', version: '1.26.1', role: 'http' };
 			let site = {
 				id: `new-${Object.keys(bSites).length}`,
 				name: newSiteInfo.siteName,
 				domain: newSiteInfo.siteDomain,
 				path: newSiteInfo.sitePath,
+				environment: newSiteInfo.environment,
+				services: { http: httpService },
 				mysql: { database: 'local', user: 'root', password: 'root' },
 			};
 			site = applyFilters('modifyAddSiteObjectBeforeCreation', site, newSiteInfo);
@@ -324,11 +339,15 @@ const cradleB = {
 	assert.strictEqual(resC.action, 'created');
 	const cDest = resC.site.path;
 	assert.strictEqual(cradleB.lastNewSiteInfo.environment, 'custom');
-	assert.strictEqual(cradleB.lastNewSiteInfo.webServer, 'apache');
+	assert.strictEqual(cradleB.lastNewSiteInfo.webServer, 'apache-2.4.43');
 	assert.strictEqual(cradleB.lastNewSiteInfo.phpVersion, '8.2.23');
+	assert.strictEqual(resC.site.services.http.name, 'apache', 'imported site did not land on Apache');
 	assert.strictEqual(
 		fs.readFileSync(path.join(cDest, 'app', 'public_html', 'wp-content', 'marker.txt'), 'utf8'), 'CUSTOM-A');
 	assert.ok(fs.existsSync(path.join(cDest, 'app', 'vendor', 'autoload.php')), 'vendor/ not restored');
+	const pubLink = fs.lstatSync(path.join(cDest, 'app', 'public'));
+	assert.ok(pubLink.isSymbolicLink(), 'symlinked app/public not restored (placeholder dir not cleared)');
+	assert.strictEqual(fs.readlinkSync(path.join(cDest, 'app', 'public')), 'public_html', 'app/public link target wrong');
 	assert.ok(fs.existsSync(path.join(cDest, 'deploy-notes.txt')), 'root-level file not restored');
 	const confOut = fs.readFileSync(path.join(cDest, 'conf', 'apache', 'site.conf.hbs'), 'utf8');
 	assert.ok(confOut.includes(`${cDest}/app/public_html`), 'conf DocumentRoot not rewritten to destination path');
@@ -351,9 +370,10 @@ const cradleB = {
 	const resPref = await importer.importExtracted(cradleB, logger, extractedPref, 'new', () => {});
 	assert.strictEqual(resPref.action, 'created');
 	assert.strictEqual(cradleB.lastNewSiteInfo.environment, 'custom');
-	assert.strictEqual(cradleB.lastNewSiteInfo.webServer, 'apache');
+	assert.strictEqual(cradleB.lastNewSiteInfo.webServer, 'apache-2.4.43');
 	assert.strictEqual(cradleB.lastNewSiteInfo.phpVersion, '8.3.1');
-	console.log('16. preferred-env Apache site promoted to custom/apache/php 8.3.1 on import');
+	assert.strictEqual(resPref.site.services.http.name, 'apache', 'preferred-env site did not land on Apache');
+	console.log('16. preferred-env Apache site promoted to custom/apache-2.4.43/php 8.3.1 on import');
 
 	// failed provisioning: Local rolls the site back -> our folder cleanup must kick in
 	const extractedD = await importer.extractExportZip(zipPath2, () => {});
@@ -368,6 +388,49 @@ const cradleB = {
 	const orphans = fs.readdirSync(machineB).filter((d) => d.startsWith('ortho-custom-'));
 	assert.strictEqual(orphans.length, 0, `orphan folder left behind: ${orphans.join(', ')}`);
 	console.log('14. failed creation: orphaned site folder cleaned up');
+
+	// concurrent export of the SAME running site must not race on the dump.
+	// Reproduces Local's dump(): write a FIXED <site>/app/sql/local.sql.tmp,
+	// then rename it onto the caller's target. Without per-site serialization,
+	// two overlapping dumps clobber the shared .tmp and the second renames a
+	// vanished file -> ENOENT. The exporter's dump lock must serialize them.
+	const { writeExportArchive } = require(path.join(ADDON, 'src/lib/exporter.js'));
+	const runningPath = path.join(TMP, 'machine-a', 'running');
+	makeSiteDir(runningPath, 'RUNNING');
+	const runningJson = {
+		id: 'run555', name: 'Running Site', domain: 'running.local', path: runningPath,
+		mysql: { database: 'local', user: 'root', password: 'root' },
+		services: { php: { name: 'php', version: '8.2.1', role: 'php' } },
+	};
+	let dumpOverlap = 0; let dumpsInFlight = 0;
+	const racyCradle = {
+		localLogger: logger,
+		siteProcessManager: { getSiteStatus: () => 'running' },
+		siteDatabase: {
+			dump: async (site, target) => {
+				dumpsInFlight += 1;
+				if (dumpsInFlight > 1) { dumpOverlap += 1; }
+				const fixedTmp = path.join(site.path, 'app', 'sql', 'local.sql.tmp');
+				fs.writeFileSync(fixedTmp, `-- dump for ${path.basename(target)}`);
+				await new Promise((r) => setTimeout(r, 15)); // let a peer interleave
+				fs.renameSync(fixedTmp, target); // ENOENT here if another dump moved it
+				dumpsInFlight -= 1;
+			},
+		},
+	};
+	const outA = path.join(machineB, 'concur', 'a.zip');
+	const outB = path.join(machineB, 'concur', 'b.zip');
+	fs.mkdirSync(path.dirname(outA), { recursive: true });
+	const streamExport = (out) => new Promise((resolve, reject) => {
+		const ws = fs.createWriteStream(out);
+		writeExportArchive(racyCradle, logger, runningJson, ws).then(resolve, reject);
+	});
+	const [rA, rB] = await Promise.allSettled([streamExport(outA), streamExport(outB)]);
+	assert.strictEqual(rA.status, 'fulfilled', `export A failed: ${rA.reason && rA.reason.message}`);
+	assert.strictEqual(rB.status, 'fulfilled', `export B failed: ${rB.reason && rB.reason.message}`);
+	assert.ok(fs.statSync(outA).size > 0 && fs.statSync(outB).size > 0, 'concurrent export produced an empty zip');
+	assert.strictEqual(dumpOverlap, 0, 'dumps of the same site ran concurrently — per-site lock not holding');
+	console.log('17. concurrent export of one running site serialized its dumps (no local.sql.tmp race)');
 
 	server.close();
 

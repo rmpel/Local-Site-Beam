@@ -208,6 +208,42 @@ function restoreHardlinks(destRoot, hardlinks, logger) {
 }
 
 /*
+ * Local scaffolds a fresh site with a real, empty default web root (app/public).
+ * When the SOURCE stored that path (or any path) as a symlink — dev setups
+ * commonly symlink app/public -> app/public_html — fs.cp refuses to overwrite
+ * the real placeholder directory with a symlink (ERR_FS_CP_NON_DIR_TO_DIR) and
+ * aborts the entire copy, leaving app/ half-populated. Walk the export for
+ * symlinks and remove any destination path that is currently a real directory,
+ * so the copy can recreate the link in its place. Only real dirs are recursed;
+ * symlinks in the export are never followed.
+ */
+function clearSymlinkPlaceholders(extractedDir, destRoot, logger) {
+	const walk = (rel) => {
+		let entries;
+		try {
+			entries = fs.readdirSync(path.join(extractedDir, rel), { withFileTypes: true });
+		} catch (err) {
+			return;
+		}
+		for (const ent of entries) {
+			const childRel = rel ? path.join(rel, ent.name) : ent.name;
+			if (ent.isSymbolicLink()) {
+				const destPath = path.join(destRoot, childRel);
+				try {
+					if (fs.lstatSync(destPath).isDirectory()) {
+						fs.rmSync(destPath, { recursive: true, force: true });
+						logger.info(`Site Beam: cleared placeholder directory ${childRel} so the exported symlink can be restored`);
+					}
+				} catch (err) { /* nothing at destPath — the copy will create the link */ }
+			} else if (ent.isDirectory()) {
+				walk(childRel);
+			}
+		}
+	};
+	walk('');
+}
+
+/*
  * Copies the exported site folder into an (already created) site.
  * No service interaction — safe to run while Local's creation flow is active.
  */
@@ -237,6 +273,10 @@ async function copySiteFiles(cradle, logger, siteJson, job, { freshSite }) {
 		}
 	}
 	fs.mkdirSync(destRoot, { recursive: true });
+	// Remove Local's real placeholder dirs (e.g. the scaffolded app/public) where
+	// the export stored a symlink, so fs.cp can recreate the link instead of
+	// aborting on ERR_FS_CP_NON_DIR_TO_DIR.
+	clearSymlinkPlaceholders(job.extractedDir, destRoot, logger);
 	// The whole exported site folder, real layout preserved (vendor/,
 	// composer.json, root-level files, …). conf/ is handled separately below.
 	for (const entry of fs.readdirSync(job.extractedDir)) {
@@ -477,14 +517,23 @@ async function importExtracted(cradle, logger, { extractedDir, manifest }, mode,
 	// templates are still keyed off the recorded manifestSite.environment
 	// (see finishRestore), so this promotion does not trigger a conf restore;
 	// Local generates fresh conf for the chosen web server.
-	const sourceWebServer = manifestSite.webServer && manifestSite.webServer.name;
+	const web = manifestSite.webServer;
+	const sourceWebServer = web && web.name;
 	if (manifestSite.environment === 'custom' || (sourceWebServer && sourceWebServer !== 'nginx')) {
 		newSiteInfo.environment = 'custom';
 		if (manifestSite.php && manifestSite.php.version) {
 			newSiteInfo.phpVersion = manifestSite.php.version;
 		}
-		if (sourceWebServer) {
-			newSiteInfo.webServer = sourceWebServer;
+		// Local builds the site's services from newSiteInfo via
+		// LightningServiceSharedUtils.getLocalSiteServices(), which parses
+		// `webServer` with getServiceSettingValueDetails() — it splits the value
+		// on '-' into { serviceName, binVersion } and DROPS it entirely unless
+		// BOTH parts are present. A bare "apache" therefore has no binVersion and
+		// is silently ignored, leaving the preferred default (nginx). Pass the
+		// compound "name-version" form (e.g. "apache-2.4.43") so it actually
+		// takes. phpVersion above is used as-is (raw version), not split.
+		if (sourceWebServer && web.version) {
+			newSiteInfo.webServer = `${sourceWebServer}-${web.version}`;
 		}
 	}
 	let site = null;

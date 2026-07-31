@@ -73,8 +73,20 @@ function clearStaleRouterState(context, logger) {
  */
 function assertRouterHealthy(context) {
 	const confDir = path.join(context.environment.userDataPath, 'run', 'router', 'nginx', 'conf');
-	if (fs.existsSync(confDir) && !fs.existsSync(path.join(confDir, 'server-block-ssl.conf'))) {
-		throw new Error("Local's router configuration on this machine is incomplete (server-block-ssl.conf is missing). In Local, start or restart any existing site once — that rebuilds the router — then retry the transfer.");
+	if (!fs.existsSync(confDir)) {
+		// Router not provisioned yet — Local builds it on first site start.
+		return;
+	}
+	// A half-built skeleton (run/router cleared while Local kept stale in-memory
+	// state) is missing core nginx includes Local copies from its router-config
+	// resources. Provisioning then dies mid-copy — observed as ENOENT on
+	// server-block-ssl.conf and, on Local 10.1.x, location-block.conf — and
+	// Local rolls the site back. Both are present on a healthy router, so treat
+	// either being absent as an incomplete skeleton and fail early with a fix.
+	const missing = ['server-block-ssl.conf', 'location-block.conf']
+		.find((file) => !fs.existsSync(path.join(confDir, file)));
+	if (missing) {
+		throw new Error(`Local's router configuration on this machine is incomplete (${missing} is missing). In Local, start or restart any existing site once — that rebuilds the router — then retry the transfer.`);
 	}
 }
 
@@ -91,7 +103,11 @@ function withCrocHint(err) {
 }
 
 function withRouterHint(err) {
-	if (/run\/router|server-block|local-router-error-pages/.test(String(err && err.message))) {
+	// Covers both directory-token forms Local logs (run/router and the
+	// unresolved %%router.runPath%%) plus the specific router-config files whose
+	// copy fails on a half-built skeleton (server-block*, location-block,
+	// local-router-error-pages).
+	if (/run\/router|router\.runPath|router-config|server-block|location-block|local-router-error-pages/.test(String(err && err.message))) {
 		err.message += " — Local's site router state looks broken on this machine. Start or restart any existing site once in Local (this rebuilds the router), then retry the transfer.";
 	}
 	return err;
