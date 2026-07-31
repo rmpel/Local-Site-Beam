@@ -14,7 +14,7 @@
 	"main": "src/main.js",
 	"renderer": "src/renderer.js",
 	"engines": {
-		"local-by-flywheel": ">=6.0.0"
+		"local-by-flywheel": ">=9.0.0"
 	},
 	"dependencies": {
 		"archiver": "^7.0.1",
