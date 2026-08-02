@@ -41,6 +41,8 @@ For LAN mode, no extenal dependencies
 
 For WAN mode, uses croc (brew install croc) and must have identical version on both sides (brew upgrade croc)
 
+Instead of croc with a push+pull mechanism, you can leverage a VPN solution or peer-to-peer solution like Tailscale and manually enter the address of the remote computer it gives. Beware of firewall rules; port 47600 must be open.
+
 ## LIMITED TESTING
 
 Testing is limited to 1 person, 2 laptops, 3 beers on one late evening.
