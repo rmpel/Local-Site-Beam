@@ -14,8 +14,8 @@
 # Local add-ons ship as a folder that the user drops into Local's addons
 # directory. That folder must be self-contained: source + a *production-only*
 # node_modules (Local does not run `npm install` for the user). This script
-# stages exactly those files, installs prod dependencies cleanly, and zips the
-# result to dist/<slug>-v<version>.zip, unpacking to a top-level folder named
+# stages exactly those files, installs prod dependencies cleanly, and packages the
+# result to dist/<slug>-v<version>.tgz, unpacking to a top-level folder named
 # after the package (the same name install.sh symlinks).
 #
 set -euo pipefail
