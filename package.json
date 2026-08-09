@@ -10,7 +10,7 @@
 	],
 	"slug": "site-beam",
 	"icon": "icon.svg",
-	"bgColor": "#2b6cb0",
+	"bgColor": "#eaf1fb",
 	"main": "src/main.js",
 	"renderer": "src/renderer.js",
 	"engines": {
