@@ -1,14 +1,13 @@
 {
 	"name": "local-site-beam",
 	"productName": "Site Beam",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Discover other Local machines on your network with a shared code and copy complete sites between them.",
 	"author": "Remon Pel",
 	"license": "GPL-3.0-or-later",
 	"keywords": [
 		"local-addon"
 	],
-	"slug": "site-beam",
 	"icon": "icon.svg",
 	"bgColor": "#eaf1fb",
 	"main": "src/main.js",
