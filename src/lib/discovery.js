@@ -24,13 +24,29 @@ const SERVICE_TYPE = 'localbeam';
 const REFRESH_INTERVAL_MS = 15000;
 const PEER_TTL_MS = 90000;
 
+function localAddressSet() {
+	const set = new Set();
+	for (const iface of Object.values(os.networkInterfaces() || {})) {
+		for (const info of iface || []) {
+			set.add(normalizeAddress(info.address));
+		}
+	}
+	return set;
+}
+
+function normalizeAddress(address) {
+	return String(address || '').toLowerCase().replace(/%.*$/, '').replace(/^::ffff:/, '');
+}
+
 class Discovery {
-	constructor({ fp, instanceId, displayName, port, logger }) {
+	constructor({ fp, instanceId, displayName, port, logger, onConflict }) {
 		this.fp = fp;
 		this.instanceId = instanceId;
 		this.displayName = displayName;
 		this.port = port;
 		this.logger = logger;
+		this.onConflict = onConflict;
+		this.conflictFired = false;
 		this.peersMap = new Map();
 		this.bonjour = null;
 		this.browser = null;
@@ -96,10 +112,29 @@ class Discovery {
 
 	onUp(service) {
 		const txt = service.txt || {};
-		if (txt.fp !== this.fp || txt.id === this.instanceId || !txt.id) {
+		if (txt.fp !== this.fp || !txt.id) {
 			return;
 		}
 		const addresses = service.addresses || [];
+		const local = localAddressSet();
+		const fromThisMachine = addresses.some((a) => local.has(normalizeAddress(a)));
+		if (txt.id === this.instanceId) {
+			// Our own advertisement echoes back — normal. But the same id from a
+			// FOREIGN address means another machine carries our identity: this
+			// happens when a VM (and thus Local's user-data, including
+			// site-beam.json) was duplicated. Report it so the identity can be
+			// regenerated; without this the clones silently ignore each other.
+			if (addresses.length && !fromThisMachine && !this.conflictFired && this.onConflict) {
+				this.conflictFired = true;
+				this.onConflict(service);
+			}
+			return;
+		}
+		if (fromThisMachine) {
+			// A stale advertisement of ourselves under a previous instanceId
+			// (mDNS caches outlive an identity regeneration) — never a peer.
+			return;
+		}
 		const host = addresses.find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a)) || addresses[0] || service.host;
 		if (!host || !service.port) {
 			return;

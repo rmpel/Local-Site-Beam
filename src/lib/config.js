@@ -15,6 +15,14 @@ const LocalMain = require('@getflywheel/local/main');
 
 const STORE_NAME = 'site-beam';
 
+function newInstanceId() {
+	return crypto.randomBytes(8).toString('hex');
+}
+
+function autoDisplayName() {
+	return os.hostname().replace(/\.local$/i, '');
+}
+
 function loadConfig() {
 	let data = {};
 	try {
@@ -24,11 +32,13 @@ function loadConfig() {
 	}
 	let changed = false;
 	if (!data.instanceId) {
-		data.instanceId = crypto.randomBytes(8).toString('hex');
+		data.instanceId = newInstanceId();
 		changed = true;
 	}
-	if (!data.displayName) {
-		data.displayName = os.hostname().replace(/\.local$/i, '');
+	// The display name tracks the machine's hostname, so renaming the computer
+	// renames it here too (a duplicated VM used to keep the original's name).
+	if (data.displayName !== autoDisplayName()) {
+		data.displayName = autoDisplayName();
 		changed = true;
 	}
 	if (typeof data.sharedCode !== 'string') {
@@ -54,4 +64,9 @@ function saveConfig(data) {
 	}
 }
 
-module.exports = { loadConfig, saveConfig };
+function resetConfig() {
+	saveConfig({});
+	return loadConfig();
+}
+
+module.exports = { loadConfig, saveConfig, resetConfig, newInstanceId };

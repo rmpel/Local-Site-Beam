@@ -14,7 +14,7 @@ const path = require('path');
 
 const LocalMain = require('@getflywheel/local/main');
 
-const { loadConfig, saveConfig } = require('./lib/config');
+const { loadConfig, saveConfig, resetConfig, newInstanceId } = require('./lib/config');
 const { deriveKey, fingerprint } = require('./lib/auth');
 const Discovery = require('./lib/discovery');
 const BeamServer = require('./lib/server');
@@ -131,6 +131,9 @@ function main(context) {
 
 	async function startNetworking() {
 		stopNetworking();
+		// Re-read the config so the display name picks up a renamed machine
+		// (all mutations are saved before this runs, so nothing is lost).
+		state.config = loadConfig();
 		const code = state.config.sharedCode;
 		if (!code) {
 			return;
@@ -152,6 +155,16 @@ function main(context) {
 				displayName: state.config.displayName,
 				port,
 				logger,
+				onConflict: () => {
+					// Another machine advertises our instanceId — Local's user
+					// data (site-beam.json) was duplicated along with a VM.
+					// Regenerate our identity and reconnect; both sides doing
+					// this is harmless, the ids simply diverge.
+					state.config.instanceId = newInstanceId();
+					saveConfig(state.config);
+					logger.warn('Site Beam: another machine on the network uses this machine\'s identity (duplicated VM?) — generated a new instance id and reconnecting.');
+					startNetworking();
+				},
 			});
 			state.discovery.start();
 			logger.info(`Site Beam listening on port ${port}`);
@@ -345,6 +358,13 @@ function main(context) {
 	LocalMain.addIpcAsyncListener('site-beam:remove-manual-peer', async ({ address }) => {
 		state.config.manualPeers = state.config.manualPeers.filter((a) => a !== address);
 		saveConfig(state.config);
+		return { ok: true };
+	});
+
+	LocalMain.addIpcAsyncListener('site-beam:reset-config', async () => {
+		stopNetworking();
+		state.config = resetConfig();
+		state.networkError = null;
 		return { ok: true };
 	});
 

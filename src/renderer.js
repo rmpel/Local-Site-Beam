@@ -179,6 +179,7 @@ function makeBeamUI(React, electron) {
 		const [crocSiteId, setCrocSiteId] = React.useState('');
 		const [crocPhrase, setCrocPhrase] = React.useState('');
 		const [crocMode, setCrocMode] = React.useState('new');
+		const [resetArmed, setResetArmed] = React.useState(false);
 		const [uiError, setUiError] = React.useState(null);
 		const pageRef = React.useRef(null);
 
@@ -397,6 +398,29 @@ function makeBeamUI(React, electron) {
 						),
 						croc.installing ? h('div', { style: { ...muted, marginTop: 4 } }, croc.installing.message) : null,
 					),
+			),
+
+			// Troubleshooting / reset
+			h('div', { style: styles.section },
+				h('h2', { style: styles.h2 }, 'Troubleshooting'),
+				h('div', { style: { ...muted, marginBottom: 8 } },
+					'Resetting clears the shared code, manual peers and this machine’s Site Beam identity, then starts fresh. ',
+					'Useful when settings were copied along with a duplicated machine or VM.'),
+				h('button', {
+					style: styles.dangerButton,
+					onClick: () => {
+						if (resetArmed) {
+							setResetArmed(false);
+							run('site-beam:reset-config').then(() => {
+								setCodeInput(null);
+								setPeerSites({});
+							});
+						} else {
+							setResetArmed(true);
+							setTimeout(() => setResetArmed(false), 5000);
+						}
+					},
+				}, resetArmed ? 'Really reset? (clears code & identity)' : 'Reset Site Beam settings…'),
 			),
 
 			h('div', { style: muted },
