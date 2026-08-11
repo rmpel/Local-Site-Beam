@@ -1,5 +1,10 @@
 # Changelog for LocalWP Plugin "Local Site Beam"
 
+= 1.1.1 =
+
+- Unreleased.
+- Transferred sites with a fixed (non-variable) path baked into the web server conf templates (e.g. `DocumentRoot "/Users/x/some/old/path/app/public_html"` instead of `{{root}}`) failed to load on the destination when that path didn't match the source's registered site path — the sourcePath→destination rewrite found nothing to replace. The importer now additionally re-anchors every docroot directive (Apache `DocumentRoot`, the matching `<Directory>`, nginx `root`) that still points outside the destination site folder onto the destination, preserving the layout below `app/` (falling back to `app/<webRootName>`). Template variables like `{{root}}` and Apache boilerplate like `<Directory />` are left untouched.
+
 = 1.1.0 =
 
 - Released 2026-08-10.

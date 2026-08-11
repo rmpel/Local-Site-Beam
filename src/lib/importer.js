@@ -133,6 +133,87 @@ function rewritePathsInDir(dir, from, to, logger) {
 }
 
 /*
+ * The sourcePath → destRoot rewrite only helps when the conf's baked paths
+ * match the source's registered site path. A moved or symlink-registered
+ * source site keeps an older literal path in its docroot directives (observed
+ * in the field: DocumentRoot "/Users/x/Development/.secondary_location/<site>/
+ * app/public_html" while site.path said "~/Development/<site>"), which
+ * survives the rewrite and points nowhere on the destination. These patterns
+ * capture the path of every docroot-carrying directive: Apache DocumentRoot,
+ * Apache <Directory ...>, nginx root.
+ */
+const DOCROOT_DIRECTIVES = [
+	/DocumentRoot[ \t]+"?([^"\r\n]+?)"?[ \t]*\r?$/gim,
+	/<Directory[ \t]+"?([^">\r\n]+?)"?[ \t]*>/gi,
+	/^[ \t]*root[ \t]+"?([^";\r\n]+?)"?[ \t]*;/gim,
+];
+
+/*
+ * Maps a stale source docroot onto the destination site folder. The export
+ * preserves the site layout, so the path below the site root is still valid —
+ * re-anchor at the last "app" segment (docroots live under app/). If that
+ * suffix doesn't exist on the destination, fall back to app/<webRootName>,
+ * which copySiteFiles already verified is present.
+ */
+function reanchorDocRoot(confPath, destRoot, webRootName) {
+	const idx = Math.max(confPath.lastIndexOf('/app/'), confPath.lastIndexOf('\\app\\'));
+	if (idx !== -1) {
+		const candidate = path.join(destRoot, ...confPath.slice(idx + 1).split(/[/\\]/));
+		if (fs.existsSync(candidate)) {
+			return candidate;
+		}
+	}
+	return path.join(destRoot, 'app', webRootName);
+}
+
+function reanchorDocRootsInDir(dir, destRoot, webRootName, logger) {
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			reanchorDocRootsInDir(full, destRoot, webRootName, logger);
+			continue;
+		}
+		if (!entry.isFile()) {
+			continue;
+		}
+		try {
+			if (fs.statSync(full).size > 1024 * 1024) {
+				continue;
+			}
+			let content = fs.readFileSync(full, 'utf8');
+			let changed = false;
+			for (const pattern of DOCROOT_DIRECTIVES) {
+				for (const match of [...content.matchAll(pattern)]) {
+					const raw = match[1].trim();
+					// Literal absolute paths only — leave {{root}}-style template
+					// variables and relative paths to Local's own rendering.
+					if (raw.includes('{{') || !/^(\/|~[/\\]|[A-Za-z]:[/\\])/.test(raw)) {
+						continue;
+					}
+					// Near-root paths like <Directory /> are Apache boilerplate, and
+					// replacing a string that short would corrupt the whole file.
+					if (raw.split(/[/\\]/).filter(Boolean).length < 2) {
+						continue;
+					}
+					const expanded = LocalMain.formatHomePath(raw);
+					if (expanded === destRoot || expanded.startsWith(destRoot + path.sep)) {
+						continue;
+					}
+					content = content.split(raw).join(reanchorDocRoot(expanded, destRoot, webRootName));
+					changed = true;
+				}
+			}
+			if (changed) {
+				fs.writeFileSync(full, content);
+				logger.info(`Site Beam: re-anchored document root in ${full}`);
+			}
+		} catch (err) {
+			logger.warn(`Site Beam: could not re-anchor document root in ${full}: ${err.message}`);
+		}
+	}
+}
+
+/*
  * Configs often pin the DB host to the SOURCE machine's per-site socket
  * (e.g. .env with DB_HOST="localhost:/Users/x/Library/.../run/<id>/mysql/
  * mysqld.sock") — a path that cannot exist on the destination. Plain
@@ -300,6 +381,9 @@ async function copySiteFiles(cradle, logger, siteJson, job, { freshSite }) {
 		if (manifestSite.sourcePath && manifestSite.sourcePath !== destRoot) {
 			rewritePathsInDir(destConf, manifestSite.sourcePath, destRoot, logger);
 		}
+		// Catch docroots the rewrite above couldn't match (stale literal paths
+		// from a moved/symlinked source site).
+		reanchorDocRootsInDir(destConf, destRoot, webRootName, logger);
 	}
 
 	restoreHardlinks(destRoot, job.manifest && job.manifest.hardlinks, logger);
