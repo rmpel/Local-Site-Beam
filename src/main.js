@@ -21,7 +21,7 @@ const BeamServer = require('./lib/server');
 const client = require('./lib/client');
 const exporter = require('./lib/exporter');
 const importer = require('./lib/importer');
-const croc = require('./lib/croc');
+const relay = require('./lib/relay');
 
 const ADDON_VERSION = require('../package.json').version;
 
@@ -90,18 +90,6 @@ function assertRouterHealthy(context) {
 	}
 }
 
-/*
- * croc's handshake errors are cryptic; the usual real-world causes are a croc
- * version mismatch between the machines (v10 changed the protocol and is
- * incompatible with 9.x) or a stray manually-started croc interfering.
- */
-function withCrocHint(err) {
-	if (/secure channel|authentication failed|problem with decoding|i\/o timeout/.test(String(err && err.message))) {
-		err.message += ' — this usually means the two machines run incompatible croc versions (check `croc --version` on both; `brew upgrade croc` until they match) or a stray croc process is still running from a terminal (quit it).';
-	}
-	return err;
-}
-
 function withRouterHint(err) {
 	// Covers both directory-token forms Local logs (run/router and the
 	// unresolved %%router.runPath%%) plus the specific router-config files whose
@@ -124,7 +112,7 @@ function main(context) {
 		discovery: null,
 		networkError: null,
 		transfer: null,               // active/last LAN pull
-		croc: { sending: null, receiving: null, installing: null, cancel: {} },
+		wan: { sending: null, receiving: null, cancel: {} },
 	};
 
 	importer.registerHooks(cradle, logger);
@@ -203,8 +191,7 @@ function main(context) {
 		return { kind, siteName, phase, message, bytesReceived, startedAt, done, error, resultName };
 	}
 
-	function publicCroc() {
-		const detected = croc.status();
+	function publicWan() {
 		const strip = (job) => job && {
 			siteName: job.siteName,
 			phrase: job.phrase,
@@ -215,13 +202,10 @@ function main(context) {
 			resultName: job.resultName,
 		};
 		return {
-			available: !!detected.crocPath,
-			crocPath: detected.crocPath,
-			version: detected.version,
-			brewAvailable: !!detected.brewPath,
-			sending: strip(state.croc.sending),
-			receiving: strip(state.croc.receiving),
-			installing: state.croc.installing,
+			relay: relay.relayBase(state.config.relayUrl),
+			relayIsDefault: relay.relayBase(state.config.relayUrl) === relay.DEFAULT_RELAY,
+			sending: strip(state.wan.sending),
+			receiving: strip(state.wan.receiving),
 		};
 	}
 
@@ -239,7 +223,7 @@ function main(context) {
 
 	function transferBusy() {
 		return (state.transfer && !state.transfer.done && !state.transfer.error)
-			|| (state.croc.receiving && !state.croc.receiving.done && !state.croc.receiving.error);
+			|| (state.wan.receiving && !state.wan.receiving.done && !state.wan.receiving.error);
 	}
 
 	async function pullFromPeer({ peer, siteId, siteName, mode }) {
@@ -306,7 +290,7 @@ function main(context) {
 		peers: peersList(),
 		localSites: localSitesSummary(),
 		transfer: publicTransfer(),
-		croc: publicCroc(),
+		wan: publicWan(),
 	}));
 
 	LocalMain.addIpcAsyncListener('site-beam:set-code', async ({ code }) => {
@@ -368,11 +352,11 @@ function main(context) {
 		return { ok: true };
 	});
 
-	// ---- croc (internet transfers) ----
+	// ---- internet transfers (built-in encrypted relay) ----
 
-	LocalMain.addIpcAsyncListener('site-beam:croc-send', async ({ siteId }) => {
-		if (state.croc.sending && !state.croc.sending.done && !state.croc.sending.error) {
-			throw new Error('A croc send is already in progress.');
+	LocalMain.addIpcAsyncListener('site-beam:wan-send', async ({ siteId }) => {
+		if (state.wan.sending && !state.wan.sending.done && !state.wan.sending.error) {
+			throw new Error('An internet send is already in progress.');
 		}
 		const siteJson = cradle.siteData.getSite(siteId);
 		if (!siteJson) {
@@ -380,13 +364,13 @@ function main(context) {
 		}
 		const job = {
 			siteName: siteJson.name,
-			phrase: croc.generatePhrase(),
+			phrase: relay.generatePhrase(),
 			phase: 'exporting',
 			message: 'Building export zip… you can already share the code phrase with the other machine.',
 			done: false,
 			error: null,
 		};
-		state.croc.sending = job;
+		state.wan.sending = job;
 		const workDir = tmpWorkDir();
 		(async () => {
 			try {
@@ -394,38 +378,30 @@ function main(context) {
 				const zipPath = path.join(workDir, `${slug}-beam.zip`);
 				await exporter.writeExportZipFile(cradle, logger, siteJson, zipPath);
 				job.phase = 'sending';
-				job.message = `Waiting for the other machine — receive with code: ${job.phrase}`;
-				const { child, done } = croc.send(zipPath, job.phrase, (line) => {
+				const { cancel, done } = relay.send(zipPath, job.phrase, (line) => {
 					job.message = line;
-					// Old croc versions ignore CROC_SECRET and generate their
-					// own code — surface whatever croc actually announces.
-					const announced = line.match(/Code is:\s*(\S+)/);
-					if (announced && announced[1] !== job.phrase) {
-						job.phrase = announced[1];
-					}
-				});
-				state.croc.cancel.send = () => child.kill('SIGTERM');
-				const outputTail = await done;
-				logger.info(`Site Beam croc send finished; croc output tail: ${outputTail || '(none)'}`);
+				}, state.config.relayUrl);
+				state.wan.cancel.send = cancel;
+				const summary = await done;
+				logger.info(`Site Beam internet send finished: ${summary}`);
 				job.phase = 'done';
 				job.done = true;
 				job.message = `"${siteJson.name}" sent.`;
 				context.notifier.notify({ title: 'Site Beam', message: job.message });
 			} catch (err) {
-				withCrocHint(err);
 				job.phase = 'error';
 				job.error = err.message;
 				job.message = err.message;
-				logger.error(`Site Beam croc send failed: ${err.message}`);
+				logger.error(`Site Beam internet send failed: ${err.message}`);
 			} finally {
-				delete state.croc.cancel.send;
+				delete state.wan.cancel.send;
 				fs.rm(workDir, { recursive: true, force: true }, () => {});
 			}
 		})();
 		return { ok: true, phrase: job.phrase };
 	});
 
-	LocalMain.addIpcAsyncListener('site-beam:croc-receive', async ({ phrase, mode }) => {
+	LocalMain.addIpcAsyncListener('site-beam:wan-receive', async ({ phrase, mode }) => {
 		if (transferBusy()) {
 			throw new Error('Another transfer is already in progress.');
 		}
@@ -437,26 +413,26 @@ function main(context) {
 			siteName: null,
 			phrase: cleaned,
 			phase: 'receiving',
-			message: 'Connecting to sender…',
+			message: 'Connecting to the relay…',
 			done: false,
 			error: null,
 			resultName: null,
 		};
-		state.croc.receiving = job;
+		state.wan.receiving = job;
 		const workDir = tmpWorkDir();
 		(async () => {
 			try {
 				clearStaleRouterState(context, logger);
 				assertRouterHealthy(context);
-				const { child, done } = croc.receive(cleaned, workDir, (line) => {
+				const { cancel, done } = relay.receive(cleaned, workDir, (line) => {
 					job.message = line;
-				});
-				state.croc.cancel.receive = () => child.kill('SIGTERM');
+				}, state.config.relayUrl);
+				state.wan.cancel.receive = cancel;
 				await done;
-				delete state.croc.cancel.receive;
+				delete state.wan.cancel.receive;
 				const zip = fs.readdirSync(workDir).find((f) => f.toLowerCase().endsWith('.zip'));
 				if (!zip) {
-					throw new Error('croc finished but no zip file was received.');
+					throw new Error('The transfer finished but no zip file was received.');
 				}
 				const { site, action } = await importer.importZipFile(
 					cradle, logger, path.join(workDir, zip), mode || 'new',
@@ -474,52 +450,42 @@ function main(context) {
 				context.notifier.notify({ title: 'Site Beam', message: job.message });
 			} catch (err) {
 				withRouterHint(err);
-				withCrocHint(err);
 				job.phase = 'error';
 				job.error = err.message;
 				job.message = err.message;
-				logger.error(`Site Beam croc receive failed: ${err.message}`);
+				logger.error(`Site Beam internet receive failed: ${err.message}`);
 			} finally {
-				delete state.croc.cancel.receive;
+				delete state.wan.cancel.receive;
 				fs.rm(workDir, { recursive: true, force: true }, () => {});
 			}
 		})();
 		return { ok: true };
 	});
 
-	LocalMain.addIpcAsyncListener('site-beam:croc-cancel', async ({ which }) => {
-		const cancel = state.croc.cancel[which];
+	LocalMain.addIpcAsyncListener('site-beam:wan-cancel', async ({ which }) => {
+		const cancel = state.wan.cancel[which];
 		if (cancel) {
 			cancel();
 		}
 		return { ok: true };
 	});
 
-	LocalMain.addIpcAsyncListener('site-beam:croc-clear', async ({ which }) => {
-		const job = state.croc[which === 'send' ? 'sending' : 'receiving'];
+	LocalMain.addIpcAsyncListener('site-beam:wan-clear', async ({ which }) => {
+		const job = state.wan[which === 'send' ? 'sending' : 'receiving'];
 		if (job && (job.done || job.error)) {
-			state.croc[which === 'send' ? 'sending' : 'receiving'] = null;
+			state.wan[which === 'send' ? 'sending' : 'receiving'] = null;
 		}
 		return { ok: true };
 	});
 
-	LocalMain.addIpcAsyncListener('site-beam:croc-install', async () => {
-		if (state.croc.installing) {
-			return { ok: true };
+	LocalMain.addIpcAsyncListener('site-beam:set-relay', async ({ relayUrl }) => {
+		const cleaned = String(relayUrl || '').trim();
+		if (cleaned && !/^https?:\/\/[^\s]+$/.test(cleaned)) {
+			throw new Error('Enter a full relay URL, e.g. https://ppng.io — or leave it empty for the default.');
 		}
-		state.croc.installing = { message: 'Installing croc with Homebrew…', error: null, done: false };
-		(async () => {
-			try {
-				const { done } = croc.installWithBrew((line) => {
-					state.croc.installing.message = line;
-				});
-				await done;
-				state.croc.installing = null;
-			} catch (err) {
-				state.croc.installing = { message: err.message, error: err.message, done: true };
-			}
-		})();
-		return { ok: true };
+		state.config.relayUrl = cleaned;
+		saveConfig(state.config);
+		return { ok: true, relay: relay.relayBase(cleaned) };
 	});
 
 	clearStaleRouterState(context, logger);

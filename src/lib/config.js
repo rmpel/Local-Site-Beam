@@ -49,6 +49,11 @@ function loadConfig() {
 		data.manualPeers = [];
 		changed = true;
 	}
+	// Empty means: use the default public piping relay for internet transfers.
+	if (typeof data.relayUrl !== 'string') {
+		data.relayUrl = '';
+		changed = true;
+	}
 	if (changed) {
 		saveConfig(data);
 	}

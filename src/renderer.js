@@ -140,7 +140,7 @@ function makeBeamUI(React, electron) {
 		);
 	}
 
-	function CrocJob({ label, job, onCancel, onClear, showPhrase, copyText }) {
+	function WanJob({ label, job, onCancel, onClear, showPhrase, copyText }) {
 		const [copied, setCopied] = React.useState(false);
 		if (!job) {
 			return null;
@@ -176,9 +176,10 @@ function makeBeamUI(React, electron) {
 		const [codeInput, setCodeInput] = React.useState(null);
 		const [manualInput, setManualInput] = React.useState('');
 		const [peerSites, setPeerSites] = React.useState({});
-		const [crocSiteId, setCrocSiteId] = React.useState('');
-		const [crocPhrase, setCrocPhrase] = React.useState('');
-		const [crocMode, setCrocMode] = React.useState('new');
+		const [wanSiteId, setWanSiteId] = React.useState('');
+		const [wanPhrase, setWanPhrase] = React.useState('');
+		const [wanMode, setWanMode] = React.useState('new');
+		const [relayInput, setRelayInput] = React.useState(null);
 		const [resetArmed, setResetArmed] = React.useState(false);
 		const [uiError, setUiError] = React.useState(null);
 		const pageRef = React.useRef(null);
@@ -245,7 +246,7 @@ function makeBeamUI(React, electron) {
 		}
 
 		const transferBusy = !!(state.transfer && !state.transfer.done && !state.transfer.error);
-		const croc = state.croc || {};
+		const wan = state.wan || {};
 		const codeValue = codeInput === null ? '' : codeInput;
 
 		return h('div', { style: styles.page, ref: pageRef },
@@ -323,81 +324,80 @@ function makeBeamUI(React, electron) {
 				),
 			),
 
-			// croc / internet transfers
+			// internet transfers (built-in encrypted relay)
 			h('div', { style: styles.section },
-				h('h2', { style: styles.h2 }, 'Internet transfer (croc)'),
-				croc.available
-					? h('div', null,
-						h('div', { style: { ...muted, marginBottom: 8 } },
-							`For computers that are not on the same network. End-to-end encrypted via a one-time code phrase (uses the public croc relay). Using croc v${croc.version || '?'} — `,
-							h('strong', null, 'both machines must run the same croc version'),
-							' (mismatched versions fail with "could not secure channel").'),
-						h('div', { style: styles.row },
-							h('select', {
-								style: styles.input,
-								value: crocSiteId,
-								onChange: (e) => setCrocSiteId(e.target.value),
-							},
-								h('option', { value: '' }, 'Choose a site to send…'),
-								(state.localSites || []).map((s) => h('option', { key: s.id, value: s.id }, s.name)),
-							),
-							h('button', {
-								style: styles.primaryButton,
-								disabled: !crocSiteId || (croc.sending && !croc.sending.done && !croc.sending.error),
-								onClick: () => run('site-beam:croc-send', { siteId: crocSiteId }),
-							}, 'Send'),
-						),
-						h(CrocJob, {
-							label: croc.sending ? `Sending "${croc.sending.siteName}"` : '',
-							job: croc.sending,
-							showPhrase: true,
-							copyText,
-							onCancel: () => run('site-beam:croc-cancel', { which: 'send' }),
-							onClear: () => run('site-beam:croc-clear', { which: 'send' }),
-						}),
-						h('div', { style: { ...styles.row, marginTop: 12 } },
-							h('input', {
-								style: styles.input,
-								placeholder: 'Code phrase from the other machine',
-								value: crocPhrase,
-								onChange: (e) => setCrocPhrase(e.target.value),
-							}),
-							h('select', {
-								style: styles.input,
-								value: crocMode,
-								onChange: (e) => setCrocMode(e.target.value),
-								title: 'What to do if the site already exists here',
-							},
-								h('option', { value: 'new' }, 'If it exists here: skip'),
-								h('option', { value: 'rename' }, 'If it exists here: rename'),
-								h('option', { value: 'overwrite' }, 'If it exists here: overwrite'),
-							),
-							h('button', {
-								style: styles.button,
-								disabled: !crocPhrase || transferBusy || (croc.receiving && !croc.receiving.done && !croc.receiving.error),
-								onClick: () => run('site-beam:croc-receive', { phrase: crocPhrase, mode: crocMode }).then(() => setCrocPhrase('')),
-							}, 'Receive'),
-						),
-						h(CrocJob, {
-							label: 'Receiving',
-							job: croc.receiving,
-							onCancel: () => run('site-beam:croc-cancel', { which: 'receive' }),
-							onClear: () => run('site-beam:croc-clear', { which: 'receive' }),
-						}),
-					)
-					: h('div', null,
-						h('div', { style: muted }, 'croc is not installed. It enables transfers between computers on different networks.'),
-						h('div', { style: { ...styles.row, marginTop: 8 } },
-							croc.brewAvailable
-								? h('button', {
-									style: styles.button,
-									disabled: !!croc.installing,
-									onClick: () => run('site-beam:croc-install'),
-								}, croc.installing ? 'Installing…' : 'Install croc with Homebrew')
-								: h('span', { style: muted }, 'Install it from https://github.com/schollz/croc, then revisit this tab.'),
-						),
-						croc.installing ? h('div', { style: { ...muted, marginTop: 4 } }, croc.installing.message) : null,
+				h('h2', { style: styles.h2 }, 'Internet transfer'),
+				h('div', { style: { ...muted, marginBottom: 8 } },
+					'For computers that are not on the same network. Built in — nothing to install. ',
+					'End-to-end encrypted with a one-time code phrase; the relay only sees encrypted bytes and never stores them. ',
+					'Both machines need Site Beam 1.2.0 or newer and must use the same relay.'),
+				h('div', { style: styles.row },
+					h('select', {
+						style: styles.input,
+						value: wanSiteId,
+						onChange: (e) => setWanSiteId(e.target.value),
+					},
+						h('option', { value: '' }, 'Choose a site to send…'),
+						(state.localSites || []).map((s) => h('option', { key: s.id, value: s.id }, s.name)),
 					),
+					h('button', {
+						style: styles.primaryButton,
+						disabled: !wanSiteId || (wan.sending && !wan.sending.done && !wan.sending.error),
+						onClick: () => run('site-beam:wan-send', { siteId: wanSiteId }),
+					}, 'Send'),
+				),
+				h(WanJob, {
+					label: wan.sending ? `Sending "${wan.sending.siteName}"` : '',
+					job: wan.sending,
+					showPhrase: true,
+					copyText,
+					onCancel: () => run('site-beam:wan-cancel', { which: 'send' }),
+					onClear: () => run('site-beam:wan-clear', { which: 'send' }),
+				}),
+				h('div', { style: { ...styles.row, marginTop: 12 } },
+					h('input', {
+						style: styles.input,
+						placeholder: 'Code phrase from the other machine',
+						value: wanPhrase,
+						onChange: (e) => setWanPhrase(e.target.value),
+					}),
+					h('select', {
+						style: styles.input,
+						value: wanMode,
+						onChange: (e) => setWanMode(e.target.value),
+						title: 'What to do if the site already exists here',
+					},
+						h('option', { value: 'new' }, 'If it exists here: skip'),
+						h('option', { value: 'rename' }, 'If it exists here: rename'),
+						h('option', { value: 'overwrite' }, 'If it exists here: overwrite'),
+					),
+					h('button', {
+						style: styles.button,
+						disabled: !wanPhrase || transferBusy || (wan.receiving && !wan.receiving.done && !wan.receiving.error),
+						onClick: () => run('site-beam:wan-receive', { phrase: wanPhrase, mode: wanMode }).then(() => setWanPhrase('')),
+					}, 'Receive'),
+				),
+				h(WanJob, {
+					label: 'Receiving',
+					job: wan.receiving,
+					onCancel: () => run('site-beam:wan-cancel', { which: 'receive' }),
+					onClear: () => run('site-beam:wan-clear', { which: 'receive' }),
+				}),
+				h('div', { style: { ...styles.row, marginTop: 12 } },
+					h('span', { style: muted }, 'Relay:'),
+					h('input', {
+						style: styles.input,
+						placeholder: wan.relay || 'https://ppng.io',
+						title: 'Public piping-server relay. Self-host one (github.com/nwtgck/piping-server) and point both machines at it for full control. Empty = default.',
+						value: relayInput === null ? '' : relayInput,
+						onChange: (e) => setRelayInput(e.target.value),
+					}),
+					relayInput !== null ? h('button', {
+						style: styles.button,
+						onClick: () => run('site-beam:set-relay', { relayUrl: relayInput }).then(() => setRelayInput(null)),
+					}, 'Save relay') : null,
+					wan.relayIsDefault ? null : h('span', { style: styles.badge }, 'custom relay'),
+				),
 			),
 
 			// Troubleshooting / reset

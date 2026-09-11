@@ -9,7 +9,7 @@
  */
 
 /*
- * Import pipeline: takes a Site Beam export zip (from a LAN peer or croc) and
+ * Import pipeline: takes a Site Beam export zip (from a LAN peer or an internet relay transfer) and
  * turns it into a working local site.
  *
  * New sites ride Local's own creation flow (the same pattern Local's Cloud

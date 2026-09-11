@@ -39,9 +39,9 @@ Feel free to contribute!
 
 For LAN mode, no extenal dependencies
 
-For WAN mode, uses croc (brew install croc) and must have identical version on both sides (brew upgrade croc)
+For WAN mode, no external dependencies either (since 1.2.0) — internet transfers are built in, end-to-end encrypted, and relayed through a public [piping server](https://github.com/nwtgck/piping-server) (default: https://ppng.io, configurable/self-hostable). Both machines need Site Beam 1.2.0+ and the same relay. (Before 1.2.0 this used croc, which required a separately-installed, version-matched binary on both sides and failed too often.)
 
-Instead of croc with a push+pull mechanism, you can leverage a VPN solution or peer-to-peer solution like Tailscale and manually enter the address of the remote computer it gives. Beware of firewall rules; port 47600 must be open.
+Instead of the relay with a push+pull mechanism, you can leverage a VPN solution or peer-to-peer solution like Tailscale and manually enter the address of the remote computer it gives. Beware of firewall rules; port 47600 must be open.
 
 ## LIMITED TESTING
 
@@ -111,11 +111,13 @@ sites** (all files + full database) from one machine to another. Effectively
   on the receiving machine it is **not** transferred by default; the UI offers
   **Copy as new** (renamed, e.g. "My Site 2") or **Overwrite** (replaces local
   files + database, with an explicit are-you-sure step).
-- **Internet transfers (optional)**: if [croc](https://github.com/schollz/croc)
-  is installed, sites can also be sent between machines on *different*
-  networks using a one-time code phrase (end-to-end encrypted via the public
-  croc relay). If croc is missing and Homebrew is present, the UI offers a
-  one-click install.
+- **Internet transfers (built in)**: sites can also be sent between machines
+  on *different* networks using a one-time code phrase. The two machines
+  rendezvous on a [piping server](https://github.com/nwtgck/piping-server)
+  relay at a path derived from a hash of the phrase; the payload itself is
+  end-to-end encrypted (AES-256-GCM, key derived from the phrase with scrypt),
+  so the relay only ever sees ciphertext and stores nothing. No external
+  tools, no version matching between machines.
 
 ## Install (each computer)
 
@@ -178,7 +180,7 @@ Click **Browse sites**, then **Copy to this computer** on any site.
   Use "Add by address" with the `ip:port` shown on the other machine.
 - One transfer at a time per receiving machine.
 
-## Internet transfer via croc
+## Internet transfer
 
 On the sending machine choose a site → **Send**; a code phrase like
 `beam-a1b2-c3d4-e5f6` appears. On the receiving machine, enter that phrase
@@ -186,11 +188,22 @@ On the sending machine choose a site → **Send**; a code phrase like
 no shared code or same-network requirement; the phrase *is* the secret, share
 it out-of-band, and only with those you trust.
 
+Notes:
+
+- Both sides must be online at the same time — the relay streams, it doesn't
+  store. Whichever side starts first simply waits for the other.
+- Both machines must run Site Beam 1.2.0+ and use the **same relay** (default:
+  the public https://ppng.io). To keep the traffic entirely on infrastructure
+  you control, [self-host a piping server](https://github.com/nwtgck/piping-server)
+  and set its URL in the Internet transfer section on both machines.
+- A wrong phrase doesn't error — the two sides just wait on different relay
+  paths forever. If nothing progresses, cancel and re-check the phrase.
+
 ## Security model (v1)
 
 Designed for trusted LANs: request signing prevents access by machines without
 the code, but the site payload itself is transferred over plain HTTP on your
-local network (croc transfers are end-to-end encrypted). Don't use the LAN
+local network (internet transfers are end-to-end encrypted). Don't use the LAN
 mode on networks you don't trust.
 
 ## Known limitations / roadmap
@@ -199,4 +212,4 @@ mode on networks you don't trust.
   the source are recorded in `beam-manifest.json` but not yet pinned on import).
 - No transfer resume; a failed download starts over.
 - No push — transfers are always pulled from the receiving machine (LAN) or
-  code-phrase based (croc).
+  code-phrase based (internet relay).
